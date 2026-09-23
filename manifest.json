@@ -1,0 +1,13 @@
+{
+  "package_name": "sky-gui",
+  "version": "0.1.0",
+  "game_edition": 3,
+  "mod_name": "SkyGUI Platform",
+  "description": "Sky TGUI",
+  "main": "sky-gui.dll",
+  "dependencies": {},
+  "keywords": ["platform", "gui", "sdk", "tgui"],
+  "author": "Thexiaoyu",
+  "license": "",
+  "website": ""
+}
