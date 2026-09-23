@@ -27,6 +27,10 @@ static const u32 RVA_LABEL           = 0x7559F0;  // Tgui_Label(scope, StlStr*)
 static const u32 RVA_SCOPE_CTOR      = 0x189F80;  // Tgui_CallerScope_ctor(scope,builder)
 static const u32 RVA_ELEM_TEXTCOLOR  = 0x1D6DC0;  // Tgui_Element_TextColor(elem,Color*)
 static const u32 RVA_ELEM_FONTSIZE   = 0x1D6F40;  // Tgui_Element_FontSize(elem,Dim*)
+static const u32 RVA_ELEM_BGCOLOR    = 0x18C520;  // Tgui_Element_BackgroundColor(elem,Color*)
+                                                  //  -> ModifyProperty "BackgroundColor";
+                                                  //     fallback direct-writes elem+0x240 (4 floats)
+                                                  //     and sets flag elem+0x3A |= 0x10
 
 // Builder field offsets (IDA-confirmed).
 static const u32 OFF_BUILDER_SRCSTR  = 4600;      // +0x11F8 caller source string
@@ -40,6 +44,7 @@ typedef void* (*PFN_Label)(void* scope, void* stlStr);
 typedef void* (*PFN_ScopeCtor)(void* scopeOut, void* builder);
 typedef void* (*PFN_ElemColor)(void* elem, void* color16);   // Color = 4 floats
 typedef void* (*PFN_ElemFontSize)(void* elem, void* dim8);   // Dim = {f32,u8}
+typedef void* (*PFN_ElemBgColor)(void* elem, void* color16); // BackgroundColor = 4 floats
 
 static u8*   gBase = nullptr;
 static PFN_SpawnBlockWrap fn_SpawnBlockWrap = nullptr;
@@ -49,6 +54,7 @@ static PFN_Label          fn_Label          = nullptr;
 static PFN_ScopeCtor      fn_ScopeCtor      = nullptr;
 static PFN_ElemColor      fn_TextColor      = nullptr;
 static PFN_ElemFontSize   fn_FontSize       = nullptr;
+static PFN_ElemBgColor    fn_BgColor        = nullptr;
 
 // Game's std::string ABI as read by Tgui_TextArgs_fromString:
 //   size @ +0x10 ([2]);  cap @ +0x18 ([3]);  data = (cap>=0x10 ? *[0] : &[0]).
@@ -185,6 +191,7 @@ bool init() {
   fn_ScopeCtor      = (PFN_ScopeCtor)rva(RVA_SCOPE_CTOR);
   fn_TextColor      = (PFN_ElemColor)rva(RVA_ELEM_TEXTCOLOR);
   fn_FontSize       = (PFN_ElemFontSize)rva(RVA_ELEM_FONTSIZE);
+  fn_BgColor        = (PFN_ElemBgColor)rva(RVA_ELEM_BGCOLOR);
   initVtables();
 
   sfn_Update.fn = rva(RVA_BARN_UPDATE);
@@ -209,6 +216,14 @@ void setText(void* elem, const char* utf8) {
 }
 void setBoolProp(void* elem, const char* prop, bool v) { (void)elem;(void)prop;(void)v; }
 void setIntProp(void* elem, const char* prop, i32 v)   { (void)elem;(void)prop;(void)v; }
+
+// Set an element's BackgroundColor (4 floats RGBA, linear). Uses the game's own
+// setter (ModifyProperty "BackgroundColor"; falls back to elem+0x240 + flag).
+void setBgColor(void* elem, const float* rgba) {
+  if (!fn_BgColor || !elem || !rgba) return;
+  float col[4] = { rgba[0], rgba[1], rgba[2], rgba[3] };
+  fn_BgColor(elem, col);
+}
 
 // Emit a native text label using the game's own Tgui_Label(scope, StlStr*).
 // A _CallerScope must be constructed first (Tgui_CallerScope_ctor) so the

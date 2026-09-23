@@ -42,6 +42,7 @@ void* spawnElement(Builder* b);                 // create + push a child element
 void  setText(void* elem, const char* utf8);    // element "Text" property
 void  setBoolProp(void* elem, const char* prop, bool v);
 void  setIntProp(void* elem, const char* prop, i32 v);
+void  setBgColor(void* elem, const float* rgba); // element "BackgroundColor" (4 floats)
 
 // High-level: emit a native text label via the game's own Label builder
 // (Tgui_Label 0x7559F0). `idstr` = stable reconcile identity. `rgba` (nullable)

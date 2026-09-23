@@ -5,6 +5,7 @@
 #include "includes/htmodloader.h"
 #include "imgui.h"
 #include "skygui/skygui.h"
+#include "skygui/esc.h"
 
 extern "C" HMODULE hModuleDll;
 using namespace sg;
@@ -21,7 +22,7 @@ static void HTMLAPI onToggleKey(HTKeyEvent* e) {
   if ((e->flags & HTKeyEventFlags_Mask) == HTKeyEventFlags_Down) {
     bool on = !platform::isEnabled();
     platform::setEnabled(on);
-    HTTellText(on ? "§aSkyGUI enabled" : "§eSkyGUI disabled");
+    HTTellText(on ? "§aSkyGUI shown" : "§eSkyGUI hidden");
   }
 }
 
@@ -43,9 +44,21 @@ extern "C" __declspec(dllexport) HTStatus HTMLAPI HTModOnInit(void*) {
     return HT_FAIL;
   }
   hKeyPanel  = HTHotkeyRegister(hModuleDll, "SkyGUI debug panel", HTKey_F4);
-  hKeyToggle = HTHotkeyRegister(hModuleDll, "SkyGUI Main gui", HTKey_F5);
+  hKeyToggle = HTHotkeyRegister(hModuleDll, "SkyGUI show/hide our UI", HTKey_F5);
   HTHotkeyListen(hKeyPanel, onPanelKey);
   HTHotkeyListen(hKeyToggle, onToggleKey);
+
+  esc::init();
+  esc::add(esc::Button()
+    .id("skygui_button")
+    .cloneIcon("system_button_subtitles")   
+    .text("tsp")
+    .child(esc::Button().id("skygui_ex1").cloneIcon("system_button_settings").text("示例 1")
+           .onClick([]{ HTTellText("§a示例按钮 1"); }))
+    .child(esc::Button().id("skygui_ex2").cloneIcon("system_button_support").text("示例 2")
+           .onClick([]{ HTTellText("§a检测出ColorSky §c§;是Gay！！！"); }))
+    );
+
   mountDemo();
   // HTTellText("§aSkyGUI Platform v%s ready. F5=enable, F4=panel.", SKYGUI_VERSION_NAME);
   return HT_SUCCESS;
@@ -73,5 +86,10 @@ extern "C" __declspec(dllexport) void HTMLAPI HTModRenderGui(float dt, void*) {
   if (ImGui::Checkbox("Async block (submit-once, flag=0)", &async))
     engine::gBlockFlag = async ? 0 : 1;
   ImGui::TextDisabled("async=submit-once (persists); sync=per-frame (clean hide)");
+  ImGui::Separator();
+  ImGui::Text("ESC hook   : %s", esc::isReady() ? "installed" : "no");
+  ImGui::Text("gather runs: %llu", (unsigned long long)esc::gGatherCalls);
+  ImGui::Text("btn injected: %llu", (unsigned long long)esc::gInjected);
+  ImGui::TextDisabled("open the pause (ESC) menu to see the injected icon");
   ImGui::End();
 }
