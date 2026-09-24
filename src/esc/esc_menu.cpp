@@ -1,9 +1,5 @@
 // ============================================================================
-// SkyGUI Platform - ESC system-button bar engine (hook + registry)
-//
-// Owns the reverse-engineered machinery; contains NO button definitions.
-// Callers register buttons via esc::add(); the GatherSystemButtons detour
-// appends each registered button to the game's output vector.
+// SkyGUI Platform - ESC system-button bar engine
 // ============================================================================
 #include <windows.h>
 #include <cstring>
@@ -26,6 +22,11 @@ static const u32 RVA_GATHER     = 0x98FB80;
 static const u32 RVA_VEC_INSERT = 0x9A6900;
 // std::string assign: sub_1401D7420(dstStr, srcStr) -- deep copy.
 static const u32 RVA_STR_ASSIGN = 0x1D7420;
+// Resolve an icon by image NAME: sub_1414B3B70(iconSpec, out). The spec holds
+// the image-name C-string at +0; on return `out` is the 0x18-byte resolved icon
+// (texture handle + UV) that the render copies from a SystemButton's +0xA0.
+// This is how the game references its shared icon pool -- no cloning needed.
+static const u32 RVA_ICON_RESOLVE = 0x14B3B70;
 
 // SystemButton(0x180) layout (IDA-confirmed via the grow/copy ctor):
 //   +0x00 vtable  +0x10 std::string id  +0xA0.. icon/visual POD
@@ -53,11 +54,13 @@ struct IdDesc { u64 h0; u64 h1; GameStr s[4]; };                    // 0x90 byte
 typedef void* (*PFN_Gather)(void*, void*, void*);
 typedef void* (*PFN_VecInsert)(void** vec, void* insertPos);
 typedef void  (*PFN_StrAssign)(void* dstStr, const void* srcStr);
+typedef void* (*PFN_IconResolve)(void* iconSpec, void* out);
 
-static u8*           gBase         = nullptr;
-static PFN_Gather    fn_origGather = nullptr;
-static PFN_VecInsert fn_VecInsert  = nullptr;
-static PFN_StrAssign fn_StrAssign  = nullptr;
+static u8*            gBase         = nullptr;
+static PFN_Gather     fn_origGather = nullptr;
+static PFN_VecInsert  fn_VecInsert  = nullptr;
+static PFN_StrAssign  fn_StrAssign  = nullptr;
+static PFN_IconResolve fn_IconResolve = nullptr;
 
 volatile u64 gGatherCalls = 0;
 volatile u64 gInjected    = 0;
@@ -108,12 +111,6 @@ static u32 gNextHandle = 1;
 static std::vector<Button*> gPath;
 static Button gBack;                            // synthetic Back button (stable)
 
-// Persistent icon cache: id -> the 0x50-byte POD icon block, harvested from the
-// stock buttons whenever we see them at root. Lets sub-menu buttons (built on
-// frames where we skip the stock gather) still show a real icon.
-struct IconBytes { u8 b[ICON_BYTES]; };
-static std::unordered_map<std::string, IconBytes> gIconCache;
-
 u32 add(Button b) {
   std::lock_guard<std::mutex> lk(gRegMutex);
   u32 h = gNextHandle++;
@@ -126,17 +123,7 @@ void remove(u32 handle) {
 }
 
 // ---- append logic ----------------------------------------------------------
-static std::string readId(u8* elem) {
-  u8* sp = elem + OFF_IDSTR;
-  u64 size = *(u64*)(sp + 0x10);
-  u64 cap  = *(u64*)(sp + 0x18);
-  const char* data = (cap >= 0x10) ? *(const char**)sp : (const char*)sp;
-  if (!data || size == 0 || size > 256) return {};
-  return std::string(data, size);
-}
-
 // Set the button's id via the game's 0x90-byte 4-string descriptor copy
-// (sub_1401D7420). Only string #1 is filled; the game resolves the label from it.
 static void setId(u8* slot, const std::string& id) {
   if (!fn_StrAssign || id.empty()) return;
   IdDesc d; memset(&d, 0, sizeof(d));
@@ -146,22 +133,44 @@ static void setId(u8* slot, const std::string& id) {
   fn_StrAssign(slot + OFF_IDDESC, &d);
 }
 
-// Harvest icons from the stock buttons currently in the vector into gIconCache.
-static void cacheStockIcons(void** vec) {
-  u8* begin = (u8*)vec[0];
-  u8* end   = (u8*)vec[1];
-  for (u8* p = begin; p && p < end; p += BTN_STRIDE) {
-    std::string id = readId(p);
-    if (!id.empty()) memcpy(gIconCache[id].b, p + OFF_ICON, ICON_BYTES);
+// Persistent resolved-icon cache: image name -> the 0x18-byte resolved icon
+// (texture handle + UV) produced by the game's own resolver. Resolve once per
+// name; reuse every frame.
+struct Icon18 { u8 b[0x18]; bool ok; };
+static std::unordered_map<std::string, Icon18> gIconByName;
+
+// Resolve an icon by image name via the game's resolver, into out (0x18 bytes).
+// Returns false if unavailable. Uses the game's shared icon pool -- any image
+// name the game ships (system_button_*, UiMenu*, ...) works, no cloning.
+static bool resolveIcon(const std::string& name, u8* out18) {
+  if (name.empty() || !fn_IconResolve) return false;
+  auto it = gIconByName.find(name);
+  if (it == gIconByName.end()) {
+    Icon18 ic; memset(&ic, 0, sizeof(ic));
+    // Icon spec: image-name C-string at +0, everything else zero (unresolved).
+    u8 spec[0x60]; memset(spec, 0, sizeof(spec));
+    *(const char**)spec = name.c_str();
+    u8 res[0x20]; memset(res, 0, sizeof(res));
+    fn_IconResolve(spec, res);
+    memcpy(ic.b, res, sizeof(ic.b));
+    ic.ok = true;
+    it = gIconByName.emplace(name, ic).first;
   }
+  if (!it->second.ok) return false;
+  memcpy(out18, it->second.b, 0x18);
+  return true;
 }
 
-// Append one button, giving it an icon from the cache + id/label + click.
+// Append one button: resolve its icon BY NAME (cloneIcon_ = image name), set
+// id/label, wire click.
 static void appendOne(void** vec, Button& b) {
   u8* slot = (u8*)fn_VecInsert(vec, (void*)vec[1]);
   if (!slot) return;
-  auto it = gIconCache.find(b.cloneIcon_);
-  if (it != gIconCache.end()) memcpy(slot + OFF_ICON, it->second.b, ICON_BYTES);
+  u8 icon18[0x18];
+  if (resolveIcon(b.cloneIcon_, icon18)) {
+    memcpy(slot + OFF_ICON, icon18, 0x18);      // texture handle + UV
+    *(float*)(slot + 0xB8) = 1.0f;              // icon scale/alpha (as the game sets)
+  }
   const std::string& idText = !b.text_.empty()     ? b.text_
                             : !b.cloneIcon_.empty() ? b.cloneIcon_
                             :                         b.id_;
@@ -174,8 +183,7 @@ static void appendOne(void** vec, Button& b) {
 // stock buttons (root frame) or is empty (we skipped the gather for a sub-menu).
 static void appendAll(void** vec, bool stockGathered) {
   std::lock_guard<std::mutex> lk(gRegMutex);
-
-  if (stockGathered) cacheStockIcons(vec);   // keep the cache fresh from stock
+  (void)stockGathered;   // icons now resolve by name; no stock harvesting needed
 
   const bool submenu = !gPath.empty();
 
@@ -198,7 +206,7 @@ static void appendAll(void** vec, bool stockGathered) {
   }
 
   if (submenu) {                               // automatic Back button
-    if (gBack.cloneIcon_.empty()) gBack.cloneIcon_ = "system_button_quit";
+    if (gBack.cloneIcon_.empty()) gBack.cloneIcon_ = "UiMenuExit";
     if (gBack.text_.empty())      gBack.text_ = "返回";
     gBack.effectiveClick_ = [] {
       std::lock_guard<std::mutex> lk(gRegMutex);
@@ -231,6 +239,7 @@ bool init() {
 
   fn_VecInsert = (PFN_VecInsert)(gBase + RVA_VEC_INSERT);
   fn_StrAssign = (PFN_StrAssign)(gBase + RVA_STR_ASSIGN);
+  fn_IconResolve = (PFN_IconResolve)(gBase + RVA_ICON_RESOLVE);
   initClickVt();
 
   sfn.fn     = gBase + RVA_GATHER;

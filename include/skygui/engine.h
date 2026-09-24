@@ -48,8 +48,41 @@ void  setBgColor(void* elem, const float* rgba); // element "BackgroundColor" (4
 // (Tgui_Label 0x7559F0). `idstr` = stable reconcile identity. `rgba` (nullable)
 // sets TextColor; `fontPts` (>0) sets FontSize in points. Builds the game's
 // string ABI + _CallerScope + TextArgs internally.
-void  drawLabel(Builder* b, const char* idstr, const char* utf8,
+void* drawLabel(Builder* b, const char* idstr, const char* utf8,
                 const float* rgba = nullptr, float fontPts = 0.0f);
+
+// High-level: a background CONTAINER. `panelBegin` spawns a container element
+// (sized colored box) and pushes a group so widgets emitted before the matching
+// `panelEnd` nest INSIDE it. w/h are tgui Dimensions; `rgba` is the fill color.
+void* panelBegin(Builder* b, const char* idstr,
+                 float wVal, u8 wUnit, float hVal, u8 hUnit,
+                 const float* rgba = nullptr);
+void  panelEnd(Builder* b);
+
+// High-level: emit an IMAGE element filled with a game image resolved by NAME
+// (any UiMenu*/system_button*/... name). w/h are tgui Dimensions.
+void* drawImage(Builder* b, const char* idstr, const char* imageName,
+                float wVal, u8 wUnit, float hVal, u8 hUnit);
+
+// ---- shared element property setters (operate on a live element handle
+// returned by panelBegin/drawLabel/drawButton). Colors are 4 linear floats;
+// dimension values pass a tgui unit (see sg::Unit). ------------------------
+void  setFillColor(void* elem, const float* rgba);
+void  setFillAlpha(void* elem, float a);
+void  setBgAlpha(void* elem, float a);
+void  setCornerRadius(void* elem, float r);
+void  setBgScale(void* elem, float s);
+void  setWidth(void* elem, float v, u8 unit);
+void  setHeight(void* elem, float v, u8 unit);
+void  setSize(void* elem, float wV, u8 wU, float hV, u8 hU);  // both axes (proven)
+void  setMarginRight(void* elem, float v, u8 unit);
+void  setTop(void* elem, float v, u8 unit);
+void  setBottom(void* elem, float v, u8 unit);
+void  setPadding(void* elem, float l, u8 lu, float t, u8 tu,
+                 float r, u8 ru, float b, u8 bu);
+// Flex layout (Yoga): dir 0=row/1=column; justify/align 0=start/1=center/2=end/
+// 3=spaceBetween; pass <0 to leave unchanged.
+void  setLayout(void* elem, int layoutDir, int justify, int align);
 
 // diagnostics
 extern volatile u64 gSubmitCalls;   // spawnBlock calls
